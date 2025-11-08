@@ -107,8 +107,12 @@
     resize();
 
     const shipRadius = 20;
-    const minGap = 150; // Увеличил вертикальный зазор
-    const obstacleSpacing = 400; // Расстояние между препятствиями
+    const minGap = 150;
+    const obstacleSpacing = 800; // Увеличил в 2 раза расстояние между препятствиями
+
+    // Настройки для ПК
+    const obstacleSpeed = 3; // Уменьшил скорость движения препятствий
+    const eyebrowSensitivity = 30; // Уменьшил чувствительность бровей
 
     const ship = {
       x: 100,
@@ -178,13 +182,13 @@
           if (calibrationCount === 30) {
             neutralEyebrow = calibrationSamples.reduce((a, b) => a + b, 0) / calibrationSamples.length;
             calibrated = true;
-            debug.innerHTML = `КАЛИБРОВКА ЗАВЕРШЕНА!<br>Нейтральное: ${neutralEyebrow.toFixed(4)}`;
+            debug.innerHTML = `КАЛИБРОВКА ЗАВЕРШЕНА!<br>Нейтральное: ${neutralEyebrow.toFixed(4)}<br>ВЕРСИЯ ДЛЯ ПК`;
           } else {
             debug.innerHTML = `Калибровка... ${calibrationCount}/30`;
           }
         } else if (calibrated) {
           const relativeRaise = eyebrowRaiseLevel - neutralEyebrow;
-          debug.innerHTML = `Брови: ${relativeRaise.toFixed(4)}<br>Нейтральное: ${neutralEyebrow.toFixed(4)}<br>Скорость: ${ship.velocity.toFixed(2)}<br>Препятствий: ${obstacles.length}<br>Кадров с последнего: ${framesSinceLastObstacle}`;
+          debug.innerHTML = `Брови: ${relativeRaise.toFixed(4)}<br>Нейтральное: ${neutralEyebrow.toFixed(4)}<br>Скорость: ${ship.velocity.toFixed(2)}<br>Препятствий: ${obstacles.length}<br>Кадров с последнего: ${framesSinceLastObstacle}<br>ВЕРСИЯ ДЛЯ ПК`;
         }
 
         if (!ship.alive && (eyebrowRaiseLevel - neutralEyebrow) > 0.02) {
@@ -199,13 +203,13 @@
       // Вычисляем насколько подняты брови относительно нейтрального положения
       const eyebrowInput = eyebrowRaiseLevel - neutralEyebrow;
       
-      // Ограничиваем и усиливаем входное значение
-      const normalizedInput = Math.max(0, Math.min(1, eyebrowInput * 50));
+      // Ограничиваем и усиливаем входное значение (уменьшенная чувствительность)
+      const normalizedInput = Math.max(0, Math.min(1, eyebrowInput * eyebrowSensitivity));
       
-      // Сильная подъемная сила
+      // Подъемная сила
       const liftForce = normalizedInput * 1.5;
       
-      // Слабая гравитация
+      // Гравитация
       const gravity = 0.4;
       
       // Обновление скорости
@@ -229,9 +233,9 @@
       
       framesSinceLastObstacle++;
       
-      // Создаем препятствие каждые 100-150 кадров (примерно 1.7-2.5 секунды)
-      const minFramesBetweenObstacles = 100;
-      const maxFramesBetweenObstacles = 150;
+      // Увеличил интервалы между препятствиями для ПК
+      const minFramesBetweenObstacles = 150;
+      const maxFramesBetweenObstacles = 220;
       
       // Проверяем, достаточно ли прошло времени с последнего препятствия
       if (framesSinceLastObstacle < minFramesBetweenObstacles) return;
@@ -297,7 +301,7 @@
       // Препятствия
       for (let i = obstacles.length - 1; i >= 0; i--) {
         const obs = obstacles[i];
-        obs.x -= 5;
+        obs.x -= obstacleSpeed; // Уменьшенная скорость для ПК
 
         ctx.fillStyle = '#f55';
         ctx.fillRect(obs.x, obs.topY, obs.width, obs.topHeight);
