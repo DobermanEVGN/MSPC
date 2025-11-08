@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Mimic Ship</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+      touch-action: none;
+      font-family: Arial, sans-serif;
+    }
+    #video {
+      display: none;
+    }
+    #gameCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+    #startScreen, #gameOverScreen {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.9);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      color: white;
+      z-index: 10;
+      text-align: center;
+      padding: 20px;
+    }
+    #gameOverScreen {
+      display: none;
+    }
+    button {
+      margin-top: 20px;
+      padding: 12px 30px;
+      font-size: 18px;
+      background: #0ff;
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #0cc;
+    }
+    #debug {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      z-index: 100;
+      background: rgba(0,0,0,0.7);
+      padding: 10px;
+      border-radius: 5px;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <video id="video" playsinline muted></video>
+  <canvas id="gameCanvas"></canvas>
+  <div id="debug"></div>
+
+  <div id="startScreen">
+    <h1>🚀 Mimic Ship</h1>
+    <p>Поднимай брови → корабль летит вверх!<br>Избегай красных стен.</p>
+    <button id="startBtn">Разрешить камеру и начать</button>
+  </div>
+
+  <div id="gameOverScreen">
+    <h2>💥 Игра окончена!</h2>
+    <p>Подними брови или нажми кнопку, чтобы начать заново.</p>
+    <button id="restartBtn">Попробовать снова</button>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const startScreen = document.getElementById('startScreen');
+    const gameOverScreen = document.getElementById('gameOverScreen');
+    const startBtn = document.getElementById('startBtn');
+    const restartBtn = document.getElementById('restartBtn');
+    const debug = document.getElementById('debug');
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const shipRadius = 20;
+    const minGap = 150; // Увеличил вертикальный зазор
+    const obstacleSpacing = 400; // Расстояние между препятствиями
+
+    const ship = {
+      x: 100,
+      y: canvas.height / 2,
+      radius: shipRadius,
+      alive: true,
+      velocity: 0
+    };
+
+    let obstacles = [];
+    let faceMesh;
+    let camera;
+    let eyebrowRaiseLevel = 0.0;
+    let neutralEyebrow = 0.0;
+    let gameActive = false;
+    let calibrated = false;
+    let calibrationSamples = [];
+    let calibrationCount = 0;
+    let lastObstacleX = 0;
+    let framesSinceLastObstacle = 0;
+
+    function initFaceMesh() {
+      faceMesh = new FaceMesh({
+        locateFile: (file) => {
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+        }
+      });
+
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+
+      faceMesh.onResults(onFaceResults);
+    }
+
+    function onFaceResults(results) {
+      if (results.multiFaceLandmarks?.[0]) {
+        const landmarks = results.multiFaceLandmarks[0];
+        
+        // Используем более надежные точки для детекции бровей
+        // Левые точки брови: 55, 65, 52, 53, 46
+        // Правые точки брови: 285, 295, 282, 283, 276
+        
+        // Вычисляем среднюю Y-координату для левой брови
+        const leftEyebrowPoints = [55, 65, 52, 53, 46];
+        const leftEyebrowY = leftEyebrowPoints.reduce((sum, index) => sum + landmarks[index].y, 0) / leftEyebrowPoints.length;
+        
+        // Вычисляем среднюю Y-координату для правой брови
+        const rightEyebrowPoints = [285, 295, 282, 283, 276];
+        const rightEyebrowY = rightEyebrowPoints.reduce((sum, index) => sum + landmarks[index].y, 0) / rightEyebrowPoints.length;
+        
+        // Средняя высота бровей (чем меньше значение - тем выше брови)
+        const averageEyebrowY = (leftEyebrowY + rightEyebrowY) / 2;
+        
+        // Нос как референсная точка
+        const noseTipY = landmarks[1].y;
+        
+        // Относительное положение бровей относительно носа
+        eyebrowRaiseLevel = noseTipY - averageEyebrowY;
+
+        if (!calibrated && calibrationCount < 30) {
+          calibrationSamples.push(eyebrowRaiseLevel);
+          calibrationCount++;
+          if (calibrationCount === 30) {
+            neutralEyebrow = calibrationSamples.reduce((a, b) => a + b, 0) / calibrationSamples.length;
+            calibrated = true;
+            debug.innerHTML = `КАЛИБРОВКА ЗАВЕРШЕНА!<br>Нейтральное: ${neutralEyebrow.toFixed(4)}`;
+          } else {
+            debug.innerHTML = `Калибровка... ${calibrationCount}/30`;
+          }
+        } else if (calibrated) {
+          const relativeRaise = eyebrowRaiseLevel - neutralEyebrow;
+          debug.innerHTML = `Брови: ${relativeRaise.toFixed(4)}<br>Нейтральное: ${neutralEyebrow.toFixed(4)}<br>Скорость: ${ship.velocity.toFixed(2)}<br>Препятствий: ${obstacles.length}<br>Кадров с последнего: ${framesSinceLastObstacle}`;
+        }
+
+        if (!ship.alive && (eyebrowRaiseLevel - neutralEyebrow) > 0.02) {
+          resetGame();
+        }
+      }
+    }
+
+    function updateShip() {
+      if (!ship.alive || !calibrated) return;
+
+      // Вычисляем насколько подняты брови относительно нейтрального положения
+      const eyebrowInput = eyebrowRaiseLevel - neutralEyebrow;
+      
+      // Ограничиваем и усиливаем входное значение
+      const normalizedInput = Math.max(0, Math.min(1, eyebrowInput * 50));
+      
+      // Сильная подъемная сила
+      const liftForce = normalizedInput * 1.5;
+      
+      // Слабая гравитация
+      const gravity = 0.4;
+      
+      // Обновление скорости
+      ship.velocity += gravity - liftForce;
+      
+      // Ограничение скорости
+      ship.velocity = Math.max(-15, Math.min(15, ship.velocity));
+      
+      // Применение скорости
+      ship.y += ship.velocity;
+      
+      // Границы экрана
+      ship.y = Math.max(ship.radius, Math.min(canvas.height - ship.radius, ship.y));
+      
+      // Легкое демпфирование
+      ship.velocity *= 0.95;
+    }
+
+    function spawnObstacle() {
+      if (!ship.alive) return;
+      
+      framesSinceLastObstacle++;
+      
+      // Создаем препятствие каждые 100-150 кадров (примерно 1.7-2.5 секунды)
+      const minFramesBetweenObstacles = 100;
+      const maxFramesBetweenObstacles = 150;
+      
+      // Проверяем, достаточно ли прошло времени с последнего препятствия
+      if (framesSinceLastObstacle < minFramesBetweenObstacles) return;
+      
+      // После минимального времени, проверяем случайность
+      if (framesSinceLastObstacle < maxFramesBetweenObstacles && Math.random() > 0.1) return;
+
+      const availableHeight = canvas.height - minGap;
+      if (availableHeight < 100) return;
+
+      // Увеличил минимальные отступы сверху и снизу
+      const minTop = 60;
+      const maxTop = availableHeight - 60;
+      if (maxTop <= minTop) return;
+
+      const topHeight = Math.random() * (maxTop - minTop) + minTop;
+      obstacles.push({
+        x: canvas.width,
+        topY: 0,
+        topHeight: topHeight,
+        bottomY: topHeight + minGap,
+        bottomHeight: canvas.height - (topHeight + minGap),
+        width: 45
+      });
+      
+      lastObstacleX = canvas.width;
+      framesSinceLastObstacle = 0;
+      
+      console.log('Создано новое препятствие. Всего:', obstacles.length);
+    }
+
+    function checkCollision(obs) {
+      const r = ship.radius;
+      const shipLeft = ship.x - r;
+      const shipRight = ship.x + r;
+      const shipTop = ship.y - r;
+      const shipBottom = ship.y + r;
+
+      const obsLeft = obs.x;
+      const obsRight = obs.x + obs.width;
+
+      if (shipRight > obsLeft && shipLeft < obsRight) {
+        if (shipTop < obs.topHeight || shipBottom > obs.bottomY) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function gameLoop() {
+      if (!gameActive) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      updateShip();
+      spawnObstacle();
+
+      // Корабль
+      ctx.fillStyle = '#0ff';
+      ctx.beginPath();
+      ctx.arc(ship.x, ship.y, ship.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Препятствия
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const obs = obstacles[i];
+        obs.x -= 5;
+
+        ctx.fillStyle = '#f55';
+        ctx.fillRect(obs.x, obs.topY, obs.width, obs.topHeight);
+        ctx.fillRect(obs.x, obs.bottomY, obs.width, obs.bottomHeight);
+
+        if (checkCollision(obs)) {
+          ship.alive = false;
+          gameOverScreen.style.display = 'flex';
+          gameActive = false;
+          return;
+        }
+
+        if (obs.x + obs.width < 0) {
+          obstacles.splice(i, 1);
+        }
+      }
+
+      if (ship.alive) {
+        requestAnimationFrame(gameLoop);
+      }
+    }
+
+    function resetGame() {
+      ship.y = canvas.height / 2;
+      ship.velocity = 0;
+      ship.alive = true;
+      obstacles = [];
+      lastObstacleX = 0;
+      framesSinceLastObstacle = 0;
+      gameOverScreen.style.display = 'none';
+      gameActive = true;
+      calibrated = false;
+      calibrationSamples = [];
+      calibrationCount = 0;
+      gameLoop();
+    }
+
+    startBtn.addEventListener('click', async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { 
+            facingMode: 'user',
+            width: { ideal: 320 },
+            height: { ideal: 240 }
+          } 
+        });
+        video.srcObject = stream;
+        startScreen.style.display = 'none';
+        initFaceMesh();
+
+        camera = new Camera(video, {
+          onFrame: async () => {
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+              await faceMesh.send({ image: video });
+            }
+          },
+          width: 320,
+          height: 240
+        });
+        camera.start();
+
+        setTimeout(() => {
+          gameActive = true;
+          gameLoop();
+        }, 1000);
+      } catch (err) {
+        alert('Не удалось получить доступ к камере. Разрешите доступ и обновите страницу.');
+        console.error(err);
+      }
+    });
+
+    restartBtn.addEventListener('click', resetGame);
+  </script>
+</body>
+</html>
